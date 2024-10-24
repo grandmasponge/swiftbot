@@ -1,0 +1,21 @@
+[package]
+name = "swiftbot"
+version = "0.1.0"
+edition = "2021"
+authors = ["Toby Reay"]
+description = "A libary for controlling the swiftbot robot"
+
+[dependencies]
+rppal = "0.19.0"
+libc = "0.2"
+void = { version = "1.0.2", optional = true }
+spin_sleep = { version = "1.0.0", optional = true }
+v4l = { version = "0.14.0" }
+image = "0.25.4"
+btleplug = "0.11.6"
+gilrs = "0.11.0"
+tokio = { version = "1.41.0", features = ["full"] }
+
+
+[build]
+target = "armv7-unknown-linux-gnueabihf"
