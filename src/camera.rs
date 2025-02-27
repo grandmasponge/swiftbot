@@ -1,67 +1,56 @@
-use std::fs::OpenOptions;
-use std::io::BufWriter;
-use std::path::PathBuf;
+use std::sync::Arc;
+use opencv::prelude::*;
+use opencv::videoio;
+use tokio::sync::Mutex;
+use opencv::core::Mat;
+use opencv::core::Vector;
+use opencv::imgcodecs;
 
-use image::ImageBuffer;
-use image::Rgba;
-use v4l::context;
-use v4l::io::traits::CaptureStream;
-use v4l::prelude::*;
-use v4l::FourCC;
-use v4l::{video::Capture, Device};
 
-use crate::SwiftBotError;
 
-pub struct Camera<'a> {
-    stream: MmapStream<'a>,
-    dev: Device,
+//opencv camera
+pub struct SwiftBotCamera {
+   cam: videoio::VideoCapture,
 }
 
-impl Camera<'_> {
-    pub fn camera_list() {
-        let context = context::enum_devices();
-        for dev in context {
-            println!("name: {}, path: {}",dev.name().unwrap(), dev.path().to_str().unwrap())
-        }
+
+impl SwiftBotCamera {
+    pub fn new() -> Self {
+      let cam = videoio::VideoCapture::new(0, videoio::CAP_ANY).unwrap();
+
+      if cam.is_opened().unwrap() == false {
+            panic!("need camera");
+      }
+
+      Self {
+         cam
+      }
     }
 
-    pub fn setup(cam_path: Option<PathBuf>) -> SwiftBotError<Self> {
-        let dev = if let Some(path) = cam_path {
-            Device::with_path(path).expect("device dose not exist")
-        } else {
-            Device::with_path("/dev/video0").expect("device not found")
-        };
+    pub async fn decode_qr(&mut self) -> String
+     {
+        let mut mat = opencv::core::Mat::default();
+        let mut qr_decoder = opencv::objdetect::QRCodeDetector::default().unwrap();
+        self.cam.read(&mut mat).unwrap();
 
-           // Set the format to YUYV 4:2:2
-         let format = v4l::Format::new(1280, 720, FourCC::new(b"YUYV"));
-        dev.set_format(&format).expect("Failed to set format");
+        let raw_str: Vec<u8> = qr_decoder.detect_and_decode_def(&mut mat).unwrap();
 
-        let stream = MmapStream::with_buffers(&dev, v4l::buffer::Type::VideoCapture, 10)
-            .expect("failed to make a stream");
-      
-       
-        // warm up the camera
-
-        println!("camera setup");
-
-        Ok(Self { stream, dev })
+        String::from_utf8(raw_str).unwrap()
     }
 
-    pub fn still<T>(&mut self, path: T) -> SwiftBotError<()>
-    where
-        T: ToString,
+    pub async fn save_pic<T>(&mut self, path: T)  
+    where T: ToString
     {
-        let path = PathBuf::from(path.to_string());
-
-        let (buf, meta) = self.stream.next()?;
+        let mut mat = opencv::core::Mat::default();
+        self.cam.read(&mut mat).unwrap();
+        let params = opencv::core::Vector::from_slice(&[
+            opencv::imgcodecs::IMWRITE_JPEG_QUALITY,
+            90, // Quality from 0-100
+        ]);
         
-        let rgb_image: ImageBuffer<Rgba<u8>, &[u8]> = ImageBuffer::from_raw(1270, 720, buf)
-            .unwrap_or_else(|| {
-                // error handling comes later
-                panic!("oops")
-            });
-        rgb_image.save_with_format(path, image::ImageFormat::Png)?;
-
-        Ok(())
+        match imgcodecs::imwrite(&path.to_string(), &mat, &opencv::core::Vector::new()) {
+            Ok(_) => println!("Successfully saved image"),
+            Err(e) => println!("Error saving image: {}", e)
+        }
     }
 }

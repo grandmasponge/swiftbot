@@ -11,12 +11,12 @@ use rppal::gpio::{Gpio, InputPin, OutputPin};
 const ULTRA_TRIG_PIN: u8 = 0x0D;
 const ULTRA_ECHO_PIN: u8 = 0x19;
 
-type SensorResult<T> = Result<T, Box<dyn Error>>;
+pub type SensorResult<T> = Result<T, Box<dyn Error>>;
 
 pub enum SensorStatus {
     Idle,
-    RecivedSig,
     SentSig,
+    RecivedSig,
 }
 
 pub struct Sensors {
@@ -45,21 +45,25 @@ impl Future for Sensors {
             }
             SensorStatus::SentSig => {
                 if self.echo_pin.is_high() {
-                    self.time_ended = Instant::now();
-                    self.state = SensorStatus::RecivedSig
+                    self.time_started = Instant::now();
+                    self.state = SensorStatus::RecivedSig;
                 }
                 Poll::Pending
             }
             SensorStatus::RecivedSig => {
-                //calculate and return
-                let duration: f32 = self
-                    .time_ended
-                    .duration_since(self.time_started)
-                    .as_micros() as f32;
+                if self.echo_pin.is_low() {
+                    self.time_ended = Instant::now();
+                    let duration: f32 = self
+                        .time_ended
+                        .duration_since(self.time_started)
+                        .as_micros() as f32;
 
-                let distance = (duration * 0.034) / 2.;
+                    let distance = (duration * 0.034) / 2.;
 
-                Poll::Ready(Ok(distance))
+                    self.state = SensorStatus::Idle; // Reset state for next measurement
+                    return Poll::Ready(Ok(distance));
+                }
+                Poll::Pending
             }
         }
     }
@@ -77,7 +81,16 @@ impl Sensors {
     }
 
     pub fn scan_distance(&mut self) {
-        self.time_started = Instant::now();
-        self.time_ended = Instant::now();
+        self.state = SensorStatus::Idle; // Reset state to start a new measurement
     }
+}
+
+pub async fn get_distance(sensors: &mut Sensors) -> SensorResult<f32> {
+    // Start the measurement
+    sensors.scan_distance();
+    
+    // Await the future to get the result
+    let distance = sensors.await?;
+    
+    Ok(distance)
 }

@@ -1,6 +1,12 @@
-use std::io::Error;
+use std::{
+    io::Error,
+    thread::sleep,
+    time::{Duration, Instant},
+};
 
+use btleplug::api::BDAddr;
 use rppal::gpio::{Gpio, InputPin, OutputPin};
+use tokio::sync::mpsc::Receiver;
 
 use crate::SwiftBotError;
 
@@ -27,12 +33,35 @@ pub struct Buttons {
     x: InputPin,
     y: InputPin,
 }
-
+#[derive(PartialEq, Debug)]
 pub enum Button {
     A,
     B,
     X,
     Y,
+    None,
+}
+
+pub struct ButtonStream {
+    pub rx: tokio::sync::mpsc::Receiver<Event>,
+    pub tx: tokio::sync::mpsc::Sender<Event>,
+    buttons: Buttons,
+}
+
+impl ButtonStream {
+    pub fn new(buttons: Buttons) -> Self {
+        let (tx, rx) = tokio::sync::mpsc::channel(10);
+        Self {
+            tx,
+            rx,
+            buttons
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Event {
+    pub button: Button,
 }
 
 impl Buttons {
@@ -44,13 +73,97 @@ impl Buttons {
             y: gpio.get(Y_BUTTON_PIN)?.into_input(),
         })
     }
+
+    pub fn block_button_duration(&self, duration: Duration) -> Event {
+        let now = Instant::now();
+        let mut end = Instant::now();
+        loop {
+            if self.a.is_low() {
+                loop {
+                    if self.a.is_high() {
+                        break;
+                    };
+                }
+                return Event { button: Button::A };
+            }
+            if self.b.is_low() {
+                loop {
+                    if self.b.is_high() {
+                        break;
+                    };
+                }
+                return Event { button: Button::B };
+            }
+            if self.x.is_low() {
+                loop {
+                    if self.x.is_high() {
+                        break;
+                    };
+                }
+                return Event { button: Button::X };
+            }
+            if self.y.is_low() {
+                loop {
+                    if self.y.is_high() {
+                        break;
+                    };
+                }
+                return Event { button: Button::Y };
+            }
+
+            end = Instant::now();
+            let dur = end.duration_since(now);
+            if duration < dur {
+                return Event {
+                    button: Button::None,
+                };
+            }
+        }
+    }
+
+    pub fn block_button(&self) -> Event {
+        loop {
+            if self.a.is_low() {
+                loop {
+                    if self.a.is_high() {
+                        break;
+                    };
+                }
+                return Event { button: Button::A };
+            }
+            if self.b.is_low() {
+                loop {
+                    if self.b.is_high() {
+                        break;
+                    };
+                }
+                return Event { button: Button::B };
+            }
+            if self.x.is_low() {
+                loop {
+                    if self.x.is_high() {
+                        break;
+                    };
+                }
+                return Event { button: Button::X };
+            }
+            if self.y.is_low() {
+                loop {
+                    if self.y.is_high() {
+                        break;
+                    };
+                }
+                return Event { button: Button::Y };
+            }
+        }
+    }
 }
 
 pub struct LEDs {
-    a: OutputPin,
-    b: OutputPin,
-    x: OutputPin,
-    y: OutputPin,
+    pub a: OutputPin,
+    pub b: OutputPin,
+    pub x: OutputPin,
+    pub y: OutputPin,
 }
 
 impl LEDs {
@@ -62,12 +175,12 @@ impl LEDs {
             y: gpio.get(Y_BUTTON_LED)?.into_output(),
         })
     }
-    pub fn turn_on_led(&mut self, led: char) -> SwiftBotError<()> {
+    pub fn turn_on_led(&mut self, led: Button) -> SwiftBotError<()> {
         match led {
-            'a' => self.a.set_high(),
-            'b' => self.b.set_high(),
-            'x' => self.x.set_high(),
-            'y' => self.y.set_high(),
+            Button::A => self.a.set_high(),
+            Button::B => self.b.set_high(),
+            Button::X => self.x.set_high(),
+            Button::Y => self.y.set_high(),
             _ => {
                 // while i havnt implimented my own proper errors i will just panic
                 panic!()
@@ -92,12 +205,12 @@ impl LEDs {
         Ok(())
     }
 
-    pub fn turn_off_led(&mut self, led: char) -> SwiftBotError<()> {
+    pub fn turn_off_led(&mut self, led: Button) -> SwiftBotError<()> {
         match led {
-            'a' => self.a.set_low(),
-            'b' => self.b.set_low(),
-            'x' => self.x.set_low(),
-            'y' => self.y.set_low(),
+            Button::A => self.a.set_low(),
+            Button::B => self.b.set_low(),
+            Button::X => self.x.set_low(),
+            Button::Y => self.y.set_low(),
             _ => {
                 // while i havnt implimented my own proper errors i will just panic
                 panic!()
@@ -133,7 +246,7 @@ impl Wheels {
     fn setup_gpio(gpio: &Gpio) -> SwiftBotError<Self> {
         Ok(Self {
             correction_l: 0.0,
-            correction_r: 0.0,
+            correction_r: 2.0,
             enable: gpio.get(ENABLE_WHEELS)?.into_output(),
             right_motor_n: gpio.get(MOTOR_RIGHT_N)?.into_output(),
             right_motor_p: gpio.get(MOTOR_RIGHT_P)?.into_output(),
@@ -168,14 +281,42 @@ impl Wheels {
         Ok(())
     }
 
+    pub fn move_forward(&mut self, speed: f64) -> SwiftBotError<()> {
+        self.set_motor_speed(Motor::Left, speed)?;
+        self.set_motor_speed(Motor::Right, speed)?;
+
+        Ok(())
+    }
+
+    pub fn stop(&mut self) -> SwiftBotError<()> {
+        self.set_motor_speed(Motor::Left, 0.)?;
+        self.set_motor_speed(Motor::Right, 0.)?;
+
+        Ok(())
+    }
+
+    pub fn move_left(&mut self) -> SwiftBotError<()> {
+        self.stop()?;
+        self.set_motor_speed(Motor::Left, 100.)?;
+        self.set_motor_speed(Motor::Right, 50.)?;
+        Ok(())
+    }
+
+    pub fn move_right(&mut self) -> SwiftBotError<()> {
+        self.stop()?;
+        self.set_motor_speed(Motor::Left, 50.)?;
+        self.set_motor_speed(Motor::Right, 100.)?;
+        Ok(())
+    }
+
     pub fn set_motor_left(&mut self, speed: f64) -> SwiftBotError<()> {
         if 100. >= speed && speed >= 0. {
             self.left_motor_p
-                .set_pwm_frequency(100., speed.abs() as f64 / 100.)?;
+                .set_pwm_frequency(100., speed.abs() / 100.)?;
             self.left_motor_n.set_pwm_frequency(100., 0.)?
         } else if -100. <= speed && speed <= 0. {
             self.left_motor_n
-                .set_pwm_frequency(100., speed.abs() as f64 / 100.)?;
+                .set_pwm_frequency(100., speed.abs() / 100.)?;
             self.left_motor_p.set_pwm_frequency(100., 0.)?;
         } else {
             // error handling will be done later for now set to 1
@@ -187,11 +328,11 @@ impl Wheels {
     pub fn set_motor_right(&mut self, speed: f64) -> SwiftBotError<()> {
         if 100. >= speed && speed >= 0. {
             self.right_motor_p
-                .set_pwm_frequency(100., speed.abs() - self.correction_r as f64 / 100.)?;
+                .set_pwm_frequency(100., speed.abs() / 100.)?;
             self.right_motor_n.set_pwm_frequency(100., 0.)?
         } else if -100. <= speed && speed <= 0. {
             self.right_motor_n
-                .set_pwm_frequency(100., speed.abs() - self.correction_l as f64 / 100.)?;
+                .set_pwm_frequency(100., speed.abs() / 100.)?;
             self.right_motor_p.set_pwm_frequency(100., 0.)?;
         } else {
             // error handling will be done later for now set to 1
