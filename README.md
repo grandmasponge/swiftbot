@@ -1,4 +1,4 @@
-#Swiftbot Rust API (VERY NOT COMPLETE)
+# Swiftbot Rust API (VERY NOT COMPLETE)
 
 
 an API for the swiftbot (Trilobot on pimroni) written in Rust 
